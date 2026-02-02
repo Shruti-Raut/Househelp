@@ -1,21 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
-const multer = require('multer');
-const path = require('path');
 const User = require('../models/User');
 const { protect, authorize } = require('../middleware/auth');
-
-// Multer storage for Aadhar cards
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        cb(null, 'uploads/');
-    },
-    filename: (req, file, cb) => {
-        cb(null, Date.now() + path.extname(file.originalname));
-    }
-});
-const upload = multer({ storage });
+const { upload } = require('../utils/cloudinary');
 
 // @route   POST /auth/register
 router.post('/register', upload.single('aadhar'), async (req, res) => {
@@ -35,7 +23,7 @@ router.post('/register', upload.single('aadhar'), async (req, res) => {
         if (role === 'provider') {
             userData.serviceCategory = serviceCategory;
             if (req.file) {
-                userData.aadharUrl = `/uploads/${req.file.filename}`;
+                userData.aadharUrl = req.file.path;
             }
         }
 

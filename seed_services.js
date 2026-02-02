@@ -6,6 +6,23 @@ const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/househelp'
 
 const newServices = [
     {
+        name: 'Bathroom Cleaning',
+        cities: ['Mumbai', 'Pune'],
+        pricing: [
+            { timeSlot: '09:00 AM - 11:00 AM', price: 400 },
+            { timeSlot: '11:00 AM - 01:00 PM', price: 400 },
+            { timeSlot: '03:00 PM - 05:00 PM', price: 500 }
+        ],
+        tasks: [
+            { name: 'Toilet Cleaning', duration: '20m' },
+            { name: 'Floor Scrubbing', duration: '30m' },
+            { name: 'Mirror & Sink Polishing', duration: '15m' }
+        ],
+        exclusions: ['Deep tile grout removal', 'Acid wash'],
+        images: ['/uploads/bathroom.jpg'],
+        isEnabled: true
+    },
+    {
         name: 'Home Cleaning Services',
         cities: ['Mumbai', 'Pune'],
         pricing: [
@@ -21,7 +38,7 @@ const newServices = [
             { name: 'Bathroom Cleaning', duration: '30m' }
         ],
         exclusions: ['Window exterior', 'Deep carpet cleaning'],
-        images: ['/uploads/cleaning.png'],
+        images: ['/uploads/cleaning_composite.jpg'],
         isEnabled: true
     },
     {
@@ -38,7 +55,7 @@ const newServices = [
             { name: 'Dishwashing', duration: '30m' }
         ],
         exclusions: ['Grocery shopping'],
-        images: ['/uploads/cooking.png'],
+        images: ['/uploads/cooking_prep.jpg'],
         isEnabled: true
     },
     {
@@ -54,7 +71,7 @@ const newServices = [
             { name: 'Inlet/Outlet cleaning', duration: '1h' }
         ],
         exclusions: ['Plumbing repairs'],
-        images: ['/uploads/tank.png'],
+        images: ['/uploads/watertank.jpg'],
         isEnabled: true
     },
     {

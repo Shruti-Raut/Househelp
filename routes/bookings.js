@@ -20,13 +20,14 @@ router.post('/', protect, authorize('customer'), async (req, res) => {
         const busyProviders = await Booking.find({
             date,
             timeSlot,
-            status: 'confirmed'
+            status: { $in: ['confirmed', 'in_progress'] }
         }).distinct('provider');
 
         const availableProvider = await User.findOne({
             role: 'provider',
             city: city,
             isVerified: true,
+            serviceCategory: service.name,
             _id: { $nin: busyProviders }
         });
 
@@ -70,8 +71,8 @@ router.post('/', protect, authorize('customer'), async (req, res) => {
 router.get('/active', protect, async (req, res) => {
     try {
         const query = req.user.role === 'customer'
-            ? { customer: req.user._id, status: { $in: ['pending', 'confirmed'] } }
-            : { provider: req.user._id, status: { $in: ['pending', 'confirmed'] } };
+            ? { customer: req.user._id, status: { $in: ['pending', 'confirmed', 'in_progress'] } }
+            : { provider: req.user._id, status: { $in: ['pending', 'confirmed', 'in_progress'] } };
 
         const bookings = await Booking.find(query)
             .populate('service')
@@ -195,6 +196,61 @@ router.get('/history', protect, async (req, res) => {
             .sort({ createdAt: -1 });
 
         res.json(bookings);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+});
+
+// @route   PATCH /bookings/:id/start
+// @desc    Provider starts the service
+router.patch('/:id/start', protect, authorize('provider'), async (req, res) => {
+    try {
+        const booking = await Booking.findById(req.params.id);
+        if (!booking) return res.status(404).json({ message: 'Booking not found' });
+        if (booking.provider.toString() !== req.user._id.toString()) {
+            return res.status(403).json({ message: 'Not authorized' });
+        }
+        if (booking.status !== 'confirmed') {
+            return res.status(400).json({ message: 'Can only start confirmed bookings' });
+        }
+
+        booking.status = 'in_progress';
+        booking.startedAt = new Date();
+        await booking.save();
+
+        res.json({ message: 'Service started!', booking });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+});
+
+// @route   PATCH /bookings/:id/stop
+// @desc    Provider or Customer stops the service
+router.patch('/:id/stop', protect, async (req, res) => {
+    try {
+        const booking = await Booking.findById(req.params.id);
+        if (!booking) return res.status(404).json({ message: 'Booking not found' });
+        
+        const isProvider = booking.provider.toString() === req.user._id.toString();
+        const isCustomer = booking.customer.toString() === req.user._id.toString();
+
+        if (!isProvider && !isCustomer) {
+            return res.status(403).json({ message: 'Not authorized' });
+        }
+
+        if (booking.status !== 'in_progress') {
+            return res.status(400).json({ message: 'Can only stop in-progress bookings' });
+        }
+
+        booking.status = 'completed';
+        await booking.save();
+
+        // Update provider earnings
+        const provider = await User.findById(booking.provider);
+        provider.earnings = (provider.earnings || 0) + (booking.pricing.total || 0);
+        await provider.save();
+
+        res.json({ message: 'Service stopped and marked as completed', booking });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }

@@ -1,20 +1,8 @@
 const express = require('express');
 const router = express.Router();
-const multer = require('multer');
-const path = require('path');
 const Service = require('../models/Service');
 const { protect, authorize } = require('../middleware/auth');
-
-// Multer storage for service images
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        cb(null, 'uploads/');
-    },
-    filename: (req, file, cb) => {
-        cb(null, 'service-' + Date.now() + path.extname(file.originalname));
-    }
-});
-const upload = multer({ storage });
+const { upload } = require('../utils/cloudinary');
 
 // @route   GET /services
 // @desc    Get all enabled services (for customers)
@@ -37,7 +25,7 @@ router.post('/', protect, authorize('admin'), upload.array('images', 10), async 
     try {
         const { name, pricing, cities } = req.body;
 
-        const imageUrls = req.files ? req.files.map(file => `/uploads/${file.filename}`) : [];
+        const imageUrls = req.files ? req.files.map(file => file.path) : [];
 
         const service = await Service.create({
             name,
@@ -69,8 +57,7 @@ router.patch('/:id', protect, authorize('admin'), upload.array('images', 10), as
         if (req.body.exclusions) updateData.exclusions = typeof req.body.exclusions === 'string' ? JSON.parse(req.body.exclusions) : req.body.exclusions;
 
         if (req.files && req.files.length > 0) {
-            const newImages = req.files.map(file => `/uploads/${file.filename}`);
-            // Note: In a real app, you might want to merge or delete old images
+            const newImages = req.files.map(file => file.path);
             updateData.images = newImages;
         }
 
