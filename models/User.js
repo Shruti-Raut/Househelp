@@ -14,8 +14,15 @@ const userSchema = new mongoose.Schema({
     isVerified: { type: Boolean, default: false }, // Admin approval status for providers
     earnings: { type: Number, default: 0 },
     points: { type: Number, default: 0 },
-    gifts: [{ type: String }]
+    gifts: [{ type: String }],
+    pushToken: { type: String },
+    location: {
+        type: { type: String, enum: ['Point'], default: 'Point' },
+        coordinates: { type: [Number], default: [73.8567, 18.5204] } // Default [lng, lat] for Pune
+    }
 }, { timestamps: true });
+
+userSchema.index({ location: '2dsphere' });
 
 userSchema.pre('save', async function () {
     if (!this.isModified('password')) return;
