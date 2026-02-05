@@ -55,7 +55,7 @@ app.use(morgan('dev'));
 
 // Log request bodies for debugging
 app.use((req, res, next) => {
-    if (req.method !== 'GET' && Object.keys(req.body).length > 0) {
+    if (req.method !== 'GET' && req.body && Object.keys(req.body).length > 0) {
         console.log('Body:', JSON.stringify(req.body, null, 2));
     }
     next();
@@ -90,6 +90,25 @@ mongoose.connect(MONGO_URI)
 app.get('/notifications/new-bookings', async (req, res) => {
     // In a real app, this would check for bookings created in the last minute
     res.json({ message: 'No new bookings' });
+});
+
+// Global Error Handler
+app.use((err, req, res, next) => {
+    console.error('--- Global Error Handled ---');
+    console.error(err);
+    if (err.message) console.error('Message:', err.message);
+    if (err.stack) console.error('Stack:', err.stack);
+    console.error('----------------------------');
+    
+    // Check if it's a Multer error
+    if (err.name === 'MulterError') {
+        return res.status(400).json({ message: `Upload Error: ${err.message}`, error: err });
+    }
+
+    res.status(err.status || 500).json({
+        message: err.message || 'Internal Server Error',
+        error: process.env.NODE_ENV === 'development' ? err : {}
+    });
 });
 
 // 404 Error Handler

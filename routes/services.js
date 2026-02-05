@@ -2,7 +2,9 @@ const express = require('express');
 const router = express.Router();
 const Service = require('../models/Service');
 const { protect, authorize } = require('../middleware/auth');
-const { upload } = require('../utils/cloudinary');
+const { serviceStorage } = require('../config/cloudinary');
+const multer = require('multer');
+const upload = multer({ storage: serviceStorage });
 
 const User = require('../models/User');
 
