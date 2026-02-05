@@ -9,9 +9,10 @@ const bookingSchema = new mongoose.Schema({
     timeSlot: { type: String, required: true },
     status: {
         type: String,
-        enum: ['pending', 'confirmed', 'completed', 'cancelled'],
+        enum: ['pending', 'confirmed', 'in_progress', 'completed', 'cancelled'],
         default: 'pending'
     },
+    startedAt: { type: Date },
     pricing: {
         base: Number,
         tax: Number,
