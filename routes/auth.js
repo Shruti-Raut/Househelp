@@ -280,4 +280,38 @@ router.patch('/location', protect, async (req, res) => {
     }
 });
 
+/**
+ * @swagger
+ * /auth/working-hours:
+ *   patch:
+ *     summary: Update provider working hours
+ *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             properties:
+ *               start: { type: string, example: "09:00" }
+ *               end: { type: string, example: "18:00" }
+ *     responses:
+ *       200:
+ *         description: Working hours updated
+ */
+router.patch('/working-hours', protect, authorize('provider'), async (req, res) => {
+    try {
+        const { start, end } = req.body;
+        if (!start || !end) return res.status(400).json({ message: 'Start and end times are required' });
+
+        const user = await User.findById(req.user._id);
+        user.workingHours = { start, end };
+        await user.save();
+        
+        res.json({ message: 'Working hours updated successfully', workingHours: user.workingHours });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+});
+
 module.exports = router;

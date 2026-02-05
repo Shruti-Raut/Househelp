@@ -9,7 +9,7 @@ const bookingSchema = new mongoose.Schema({
     timeSlot: { type: String, required: true },
     status: {
         type: String,
-        enum: ['pending', 'confirmed', 'in_progress', 'completed', 'cancelled'],
+        enum: ['pending', 'confirmed', 'in progress', 'completed', 'cancelled'],
         default: 'pending'
     },
     startedAt: { type: Date },
@@ -22,10 +22,31 @@ const bookingSchema = new mongoose.Schema({
         lat: Number,
         lng: Number
     },
+    selectedPack: {
+        duration: Number,
+        label: String,
+        price: Number
+    },
+    selectedTasks: [{
+        name: String
+    }],
     feedback: {
         rating: Number,
         comment: String
     }
 }, { timestamps: true });
+
+// Prevent double booking: A provider cannot have two confirmed or in-progress bookings for the same slot
+// We use a partial index to ignore null providers (pending assignment)
+bookingSchema.index(
+    { provider: 1, date: 1, timeSlot: 1 },
+    { 
+        unique: true, 
+        partialFilterExpression: { 
+            provider: { $exists: true, $ne: null },
+            status: { $in: ['pending', 'confirmed', 'in progress'] }
+        }
+    }
+);
 
 module.exports = mongoose.model('Booking', bookingSchema);

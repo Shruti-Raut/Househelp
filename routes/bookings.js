@@ -39,6 +39,10 @@ router.post('/', protect, authorize('customer'), async (req, res) => {
     try {
         const { serviceId, address, city, date, timeSlot, location } = req.body;
 
+        // Support both lat/lng and latitude/longitude
+        if (location && !location.lat && location.latitude) location.lat = location.latitude;
+        if (location && !location.lng && location.longitude) location.lng = location.longitude;
+
         if (!location || !location.lat || !location.lng) {
             return res.status(400).json({ message: 'Location (lat/lng) is required for booking' });
         }
@@ -48,13 +52,21 @@ router.post('/', protect, authorize('customer'), async (req, res) => {
         if (!service) return res.status(404).json({ message: 'Service not found' });
 
         // 2. Find available verified providers within 40km radius
+        // We exclude providers who are already booked (pending, confirmed, or in progress)
         const busyProviders = await Booking.find({
             date,
             timeSlot,
-            status: { $in: ['confirmed', 'in_progress'] }
+            status: { $in: ['pending', 'confirmed', 'in progress'] }
         }).distinct('provider');
 
-        console.log(`Searching for available providers for category: "${service.name}"`);
+        const fLat = parseFloat(location?.lat);
+        const fLng = parseFloat(location?.lng);
+
+        if (isNaN(fLat) || isNaN(fLng)) {
+             return res.status(400).json({ message: 'Invalid location coordinates' });
+        }
+
+        console.log(`Searching for available providers for category: "${service.name}" at [${fLng}, ${fLat}]`);
         const availableProvider = await User.findOne({
             role: 'provider',
             isVerified: true,
@@ -64,7 +76,7 @@ router.post('/', protect, authorize('customer'), async (req, res) => {
                 $near: {
                     $geometry: {
                         type: 'Point',
-                        coordinates: [parseFloat(location.lng), parseFloat(location.lat)]
+                        coordinates: [fLng, fLat]
                     },
                     $maxDistance: 40000 // 40,000 meters = 40km
                 }
@@ -88,29 +100,79 @@ router.post('/', protect, authorize('customer'), async (req, res) => {
         }
 
         // 3. Prepare pricing
-        const pricingRule = service.pricing.find(p => p.timeSlot === timeSlot);
-        if (!pricingRule) return res.status(400).json({ message: 'Invalid time slot selected' });
+        /**
+         * Helper to get price for a specific slot label (e.g. "09:00 AM - 11:00 AM")
+         * Consistent with the logic in services.js availability route
+         */
+        const calculateSlotPrice = (label) => {
+            const rangeMatch = label.match(/(\d{2}:\d{2})\s*(AM|PM)\s*-\s*(\d{2}:\d{2})\s*(AM|PM)/i);
+            if (!rangeMatch) return null;
 
-        const basePrice = pricingRule.price;
+            const convertToMinutes = (time, ampm) => {
+                let [h, m] = time.split(':').map(Number);
+                if (ampm.toUpperCase() === 'PM' && h < 12) h += 12;
+                if (ampm.toUpperCase() === 'AM' && h === 12) h = 0;
+                return h * 60 + m;
+            };
+
+            const startTimeVal = convertToMinutes(rangeMatch[1], rangeMatch[2]);
+            const endTimeVal = convertToMinutes(rangeMatch[3], rangeMatch[4]);
+
+            for (const window of service.pricing) {
+                const [wStartH, wStartM] = (window.startTime || '00:00').split(':').map(Number);
+                const [wEndH, wEndM] = (window.endTime || '23:59').split(':').map(Number);
+                
+                const wStartTimeVal = wStartH * 60 + wStartM;
+                const wEndTimeVal = wEndH * 60 + wEndM;
+
+                // If slot start is within this window
+                if (startTimeVal >= wStartTimeVal && endTimeVal <= wEndTimeVal) {
+                    return window.price;
+                }
+            }
+            // Fallback to first pricing entry if no window matches perfectly
+            return service.pricing[0]?.price || 0;
+        };
+
+        let basePrice = calculateSlotPrice(timeSlot);
+        if (req.body.selectedPack && req.body.selectedPack.price) {
+            basePrice = Number(req.body.selectedPack.price);
+        }
+
+        if (basePrice === null) return res.status(400).json({ message: 'Invalid time slot format' });
+
         const tax = basePrice * 0.18;
         const total = basePrice + tax;
 
-        const booking = await Booking.create({
-            customer: req.user._id,
-            provider: availableProvider ? availableProvider._id : null,
-            service: serviceId,
-            address,
-            city, // Store original city for display
-            date,
-            timeSlot,
-            status: availableProvider ? 'confirmed' : 'pending',
-            pricing: {
-                base: basePrice,
-                tax: tax,
-                total: total
-            },
-            location: location // { lat, lng }
-        });
+        let booking;
+        try {
+            booking = await Booking.create({
+                customer: req.user._id,
+                provider: availableProvider ? availableProvider._id : null,
+                service: serviceId,
+                address,
+                city,
+                date,
+                timeSlot,
+                status: availableProvider ? 'confirmed' : 'pending',
+                pricing: {
+                    base: basePrice,
+                    tax: tax,
+                    total: total
+                },
+                location: location,
+                selectedPack: req.body.selectedPack, // For InstaHelp
+                selectedTasks: req.body.selectedTasks // For InstaHelp
+            });
+        } catch (dbErr) {
+            // Handle concurrency: If the provider was just taken by someone else
+            if (dbErr.code === 11000) {
+                console.log(`Concurrency Conflict: Provider ${availableProvider.name} was just booked for this slot. Retrying...`);
+                // Simple recursive retry (one level) or just return error
+                return res.status(409).json({ message: 'This slot was just taken. Please try again.' });
+            }
+            throw dbErr;
+        }
 
         // Send Notification to Provider
         if (availableProvider && availableProvider.pushToken) {
@@ -128,6 +190,7 @@ router.post('/', protect, authorize('customer'), async (req, res) => {
                 : 'No provider available at this time. Booking is pending.'
         });
     } catch (error) {
+        console.error('[Booking Create Error]:', error);
         res.status(500).json({ message: error.message });
     }
 });
@@ -147,14 +210,14 @@ router.post('/', protect, authorize('customer'), async (req, res) => {
 router.get('/active', protect, async (req, res) => {
     try {
         const query = req.user.role === 'customer'
-            ? { customer: req.user._id, status: { $in: ['pending', 'confirmed', 'in_progress'] } }
-            : { provider: req.user._id, status: { $in: ['pending', 'confirmed', 'in_progress'] } };
+            ? { customer: req.user._id, status: { $in: ['pending', 'confirmed', 'in progress'] } }
+            : { provider: req.user._id, status: { $in: ['pending', 'confirmed', 'in progress'] } };
 
         const bookings = await Booking.find(query)
             .populate('service')
             .populate('provider', 'name phone')
             .populate('customer', 'name phone')
-            .sort({ date: -1, timeSlot: -1 });
+            .sort({ createdAt: -1 });
 
         res.json(bookings);
     } catch (error) {
@@ -184,7 +247,10 @@ router.get('/pending', protect, authorize('provider'), async (req, res) => {
                 { status: 'pending', city: req.user.city } // This requires city in Booking model, let's stick to provider id
             ]
         };
-        const bookings = await Booking.find({ provider: req.user._id }).populate('customer', 'name phone').populate('service');
+        const bookings = await Booking.find({ provider: req.user._id })
+            .populate('customer', 'name phone')
+            .populate('service')
+            .sort({ createdAt: -1 });
         res.json(bookings);
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -208,8 +274,83 @@ router.get('/all', protect, authorize('admin'), async (req, res) => {
         const bookings = await Booking.find()
             .populate('customer provider', 'name phone')
             .populate('service')
-            .sort({ date: -1, timeSlot: -1 });
+            .sort({ createdAt: -1 });
         res.json(bookings);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+});
+
+/**
+ * @swagger
+ * /bookings/{id}/available-providers:
+ *   get:
+ *     summary: Get available providers for a specific booking slot
+ *     tags: [Bookings]
+ */
+router.get('/:id/available-providers', protect, authorize('admin'), async (req, res) => {
+    try {
+        const booking = await Booking.findById(req.params.id).populate('service');
+        if (!booking) return res.status(404).json({ message: 'Booking not found' });
+
+        const { date, timeSlot, location } = booking;
+        
+        // Find busy providers for this date (need to check overlaps)
+        const dayBookings = await Booking.find({ 
+            date, 
+            status: { $in: ['pending', 'confirmed', 'in progress'] },
+            _id: { $ne: booking._id } 
+        });
+
+        // Helper to parse slot into minutes
+        const parseSlot = (label) => {
+            const match = label.match(/(\d{2}:\d{2})\s*(AM|PM)\s*-\s*(\d{2}:\d{2})\s*(AM|PM)/i);
+            if (!match) return null;
+            const parseH = (h, ampm) => {
+                let val = parseInt(h);
+                if (ampm.toLowerCase() === 'pm' && val < 12) val += 12;
+                if (ampm.toLowerCase() === 'am' && val === 12) val = 0;
+                return val;
+            };
+            const startH = parseH(match[1].split(':')[0], match[2]);
+            const startM = parseInt(match[1].split(':')[1]);
+            const endH = parseH(match[3].split(':')[0], match[4]);
+            const endM = parseInt(match[3].split(':')[1]);
+            return { start: startH * 60 + startM, end: endH * 60 + endM };
+        };
+
+        const targetRange = parseSlot(timeSlot);
+        if (!targetRange) return res.json([]);
+
+        // Find providers near booking location
+        const eligibleProviders = await User.find({
+            role: 'provider',
+            isVerified: true,
+            location: {
+                $near: {
+                    $geometry: {
+                        type: 'Point',
+                        coordinates: [location.lng, location.lat]
+                    },
+                    $maxDistance: 40000 
+                }
+            }
+        });
+
+        const availableProviders = eligibleProviders.filter(provider => {
+            const providerBusyRanges = dayBookings
+                .filter(b => b.provider && b.provider.toString() === provider._id.toString())
+                .map(b => parseSlot(b.timeSlot))
+                .filter(Boolean);
+
+            const isOverlap = providerBusyRanges.some(range => {
+                return targetRange.start < range.end && targetRange.end > range.start;
+            });
+
+            return !isOverlap;
+        });
+
+        res.json(availableProviders);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -249,15 +390,7 @@ router.patch('/:id/assign', protect, authorize('admin'), async (req, res) => {
             return res.status(404).json({ message: 'Provider not found' });
         }
 
-        // Strict category matching (with trim/lowercase for robustness)
-        const providerCat = (provider.serviceCategory || "").trim().toLowerCase();
-        const serviceCat = (booking.service.name || "").trim().toLowerCase();
-
-        if (providerCat !== serviceCat) {
-            return res.status(400).json({ 
-                message: `Provider category ("${provider.serviceCategory}") does not match booking service ("${booking.service.name}")` 
-            });
-        }
+        // Admin can assign any available provider within range (category check removed per user request)
 
         booking.provider = providerId;
         booking.status = 'confirmed';
@@ -424,7 +557,7 @@ router.get('/history', protect, async (req, res) => {
             .populate('service')
             .populate('provider', 'name phone')
             .populate('customer', 'name phone')
-            .sort({ date: -1, timeSlot: -1 });
+            .sort({ createdAt: -1 });
 
         res.json(bookings);
     } catch (error) {
@@ -460,7 +593,7 @@ router.patch('/:id/start', protect, authorize('provider'), async (req, res) => {
             return res.status(400).json({ message: 'Can only start confirmed bookings' });
         }
 
-        booking.status = 'in_progress';
+        booking.status = 'in progress';
         booking.startedAt = new Date();
         await booking.save();
 
@@ -509,7 +642,7 @@ router.patch('/:id/stop', protect, async (req, res) => {
             return res.status(403).json({ message: 'Not authorized' });
         }
 
-        if (booking.status !== 'in_progress') {
+        if (booking.status !== 'in progress') {
             return res.status(400).json({ message: 'Can only stop in-progress bookings' });
         }
 

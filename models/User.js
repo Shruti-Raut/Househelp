@@ -19,6 +19,10 @@ const userSchema = new mongoose.Schema({
     location: {
         type: { type: String, enum: ['Point'], default: 'Point' },
         coordinates: { type: [Number], default: [73.8567, 18.5204] } // Default [lng, lat] for Pune
+    },
+    workingHours: {
+        start: { type: String, default: '08:00' }, // 24h format
+        end: { type: String, default: '20:00' }
     }
 }, { timestamps: true });
 
